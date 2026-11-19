@@ -1,0 +1,217 @@
+use async_trait::async_trait;
+use schemars::{JsonSchema, Schema};
+use serde::Deserialize;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use sqlx::PgConnection;
+
+use crate::context::{Actor, Ctx};
+use crate::error::{AppError, ErrorKind, Result, bad_request, forbidden, unauthorized};
+use crate::permissions::Permission;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    Query,
+    Mutation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Public,
+    Authenticated,
+    Permission(Permission),
+}
+
+/// Whether agents (MCP clients) and non-session credentials (API keys,
+/// OAuth tokens) may call a service. Every service decides; `Undecided` is hidden and fails a test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exposure {
+    Undecided,
+    Tool,
+    /// Not a tool, with the reason shown in the docs and tests.
+    Hidden(&'static str),
+}
+
+const PUBLIC: Exposure = Exposure::Hidden("Callable without signing in, so it never acts for a user.");
+
+#[derive(Debug, Clone, Copy)]
+pub struct Meta {
+    /// Dotted name, e.g. `users.update`. The MCP tool name is this with dots as underscores.
+    pub name: &'static str,
+    /// Written for a model: what it does and when to use it. Becomes the MCP tool description.
+    pub description: &'static str,
+    pub kind: Kind,
+    pub access: Access,
+    /// Offered as an MCP tool. Hidden for credentials, the caller's own session, and public calls.
+    pub exposure: Exposure,
+    /// May delete or overwrite something, or weaken a control. MCP clients ask before calling it.
+    pub destructive: bool,
+    /// Reaches outside OpenTrail: sends email or calls a deploy hook.
+    pub open_world: bool,
+    /// Mutations run in one transaction. Off when a failure must still persist writes (failed-login counters).
+    pub transaction: bool,
+    /// Callable while the user still has to set up enforced two-factor.
+    pub allow_without_two_factor: bool,
+}
+
+impl Meta {
+    pub const fn query(name: &'static str, description: &'static str, access: Access) -> Meta {
+        Meta {
+            name,
+            description,
+            kind: Kind::Query,
+            access,
+            exposure: if matches!(access, Access::Public) { PUBLIC } else { Exposure::Undecided },
+            destructive: false,
+            open_world: false,
+            transaction: false,
+            allow_without_two_factor: false,
+        }
+    }
+
+    pub const fn mutation(name: &'static str, description: &'static str, access: Access) -> Meta {
+        Meta {
+            name,
+            description,
+            kind: Kind::Mutation,
+            access,
+            exposure: if matches!(access, Access::Public) { PUBLIC } else { Exposure::Undecided },
+            destructive: false,
+            open_world: false,
+            transaction: true,
+            allow_without_two_factor: false,
+        }
+    }
+
+    pub const fn tool(mut self) -> Meta {
+        self.exposure = Exposure::Tool;
+        self
+    }
+
+    pub const fn not_a_tool(mut self, reason: &'static str) -> Meta {
+        self.exposure = Exposure::Hidden(reason);
+        self
+    }
+
+    pub const fn destructive(mut self) -> Meta {
+        self.destructive = true;
+        self
+    }
+
+    pub const fn open_world(mut self) -> Meta {
+        self.open_world = true;
+        self
+    }
+
+    pub fn is_tool(&self) -> bool {
+        self.exposure == Exposure::Tool
+    }
+
+    pub const fn without_transaction(mut self) -> Meta {
+        self.transaction = false;
+        self
+    }
+
+    pub const fn before_two_factor(mut self) -> Meta {
+        self.allow_without_two_factor = true;
+        self
+    }
+
+    pub fn tool_name(&self) -> String {
+        self.name.replace('.', "_")
+    }
+}
+
+/// One unit of business logic. The web app, REST API, MCP and the worker all call services, so validation, permission checks, transactions and audit happen once.
+#[async_trait]
+pub trait Service: Send + Sync + 'static {
+    type Input: DeserializeOwned + JsonSchema + Send + 'static;
+    type Output: Serialize + JsonSchema + Send + 'static;
+    const META: Meta;
+    async fn run(ctx: &Ctx, conn: &mut PgConnection, input: Self::Input) -> Result<Self::Output>;
+}
+
+pub fn can_access(access: Access, ctx: &Ctx) -> bool {
+    allows(access, ctx.actor.as_ref())
+}
+
+pub fn allows(access: Access, actor: Option<&Actor>) -> bool {
+    match access {
+        Access::Public => true,
+        Access::Authenticated => actor.is_some(),
+        Access::Permission(p) => actor.is_some_and(|a| a.can(p)),
+    }
+}
+
+pub fn authorize(meta: &Meta, ctx: &Ctx) -> Result<()> {
+    if meta.access == Access::Public {
+        return Ok(());
+    }
+    let actor = ctx.actor.as_ref().ok_or_else(unauthorized)?;
+    if actor.must_enable_two_factor && !meta.allow_without_two_factor {
+        return Err(AppError::new(ErrorKind::Forbidden, "Set up two-factor authentication first. Your administrator requires it."));
+    }
+    if !can_access(meta.access, ctx) {
+        return Err(forbidden());
+    }
+    Ok(())
+}
+
+/// Runs a service with typed input: authorization, then a transaction for mutations.
+pub async fn call<S: Service>(ctx: &Ctx, input: S::Input) -> Result<S::Output> {
+    authorize(&S::META, ctx)?;
+    if S::META.kind == Kind::Mutation && S::META.transaction {
+        let mut tx = ctx.db().begin().await?;
+        let output = S::run(ctx, &mut tx, input).await?;
+        tx.commit().await?;
+        Ok(output)
+    } else {
+        let mut conn = ctx.db().acquire().await?;
+        S::run(ctx, &mut conn, input).await
+    }
+}
+
+/// Type-erased service, for the registry that MCP and the RPC endpoint use.
+#[async_trait]
+pub trait DynService: Send + Sync {
+    fn meta(&self) -> &Meta;
+    fn input_schema(&self) -> Schema;
+    fn output_schema(&self) -> Schema;
+    /// Whether the caller may call this with this input, without running it.
+    fn check(&self, ctx: &Ctx, input: &serde_json::Value) -> Result<()>;
+    async fn invoke(&self, ctx: &Ctx, input: serde_json::Value) -> Result<serde_json::Value>;
+}
+
+struct Erased<S>(std::marker::PhantomData<S>);
+
+#[async_trait]
+impl<S: Service> DynService for Erased<S> {
+    fn meta(&self) -> &Meta {
+        &S::META
+    }
+
+    fn input_schema(&self) -> Schema {
+        schemars::schema_for!(S::Input)
+    }
+
+    fn output_schema(&self) -> Schema {
+        schemars::schema_for!(S::Output)
+    }
+
+    fn check(&self, ctx: &Ctx, input: &serde_json::Value) -> Result<()> {
+        authorize(&S::META, ctx)?;
+        S::Input::deserialize(input).map(|_| ()).map_err(|e| bad_request(format!("Invalid input: {e}")))
+    }
+
+    async fn invoke(&self, ctx: &Ctx, input: serde_json::Value) -> Result<serde_json::Value> {
+        let input = if input.is_null() { serde_json::json!({}) } else { input };
+        let input: S::Input = serde_json::from_value(input).map_err(|e| bad_request(format!("Invalid input: {e}")))?;
+        let output = call::<S>(ctx, input).await?;
+        serde_json::to_value(output).map_err(AppError::internal)
+    }
+}
+
+pub fn erase<S: Service>() -> Box<dyn DynService> {
+    Box::new(Erased::<S>(std::marker::PhantomData))
+}

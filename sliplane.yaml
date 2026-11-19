@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://sliplane.opendeploy.cloud/schema/v1.json
+version: 1
+
+app:
+  name: OpenTrail
+  description: Self-hosted session recording with replay, console and network logs, and an API and MCP server for AI agents.
+  icon: ./web/public/favicon.svg
+  docs: https://github.com/nielsbosma/OpenTrail#readme
+
+server:
+  minimum: starter
+  recommended: base
+  shared: true
+
+addons:
+  email:
+    use: resend
+    optional: true
+    reason: Invitations and password resets. Not needed if everyone signs in with single sign-on.
+
+secrets:
+  setup_code:
+    length: 32
+    label: Setup Code
+    show: true
+
+databases:
+  db:
+    engine: postgres
+    version: 18
+    database: opentrail
+    managed:
+      instanceType: starter
+      diskGb: 10
+
+services:
+  opentrail:
+    image: ghcr.io/nielsbosma/opentrail:${{ release.version }}
+    public: true
+    port: 3000
+    healthcheck: /api/health
+    env:
+      DATABASE_URL: ${{ databases.db.url }}
+      APP_SECRET: ${{ secret(48) }}
+      APP_URL: ${{ services.opentrail.url }}
+      SETUP_CODE: ${{ secrets.setup_code }}
+      OPENTRAIL_EMAIL_API_KEY: ${{ addons.email.apiKey }}
+      OPENTRAIL_EMAIL_FROM_ADDRESS: ${{ addons.email.from }}
+      OPENTRAIL_UPDATES_UPDATE_URL: ${{ deployment.updateUrl }}
+
+done:
+  open: ${{ services.opentrail.url }}/setup#code=${{ secrets.setup_code }}
+  message: |
+    Open OpenTrail to create the first admin. The link carries the setup code, which stops working once the admin exists.
+    Then create a project and paste its snippet into your site.

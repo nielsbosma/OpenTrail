@@ -1,0 +1,49 @@
+[package]
+name = "opentrail-core"
+description = "Services, permissions, audit, settings, auth, email and jobs. Every surface calls into this."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+opentrail-crypto = { workspace = true }
+opentrail-db = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+ipnet = "2"
+psl = "2"
+hmac = { workspace = true }
+reqwest = { workspace = true }
+rsa = { version = "0.9", features = ["sha2"] }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = "2"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+x509-cert = { version = "0.3", features = ["pem"] }
+uuid = { workspace = true }
+ciborium = "0.2.2"
+ed25519-dalek = "2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+
+[features]
+testing = ["opentrail-db/testing"]
+
+[dev-dependencies]
+rand = { workspace = true }
+opentrail-core = { path = ".", features = ["testing"] }
+axum = { workspace = true }

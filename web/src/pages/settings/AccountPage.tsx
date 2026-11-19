@@ -1,0 +1,358 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { Pencil } from 'lucide-react';
+import QRCode from 'qrcode';
+import { type FormEvent, useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { CopyButton, Field, Loading, Spinner } from '@/components/common';
+import { needsStepUp, StepUpDialog } from '@/components/StepUpDialog';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { call, errorMessage, type TwoFactorSetup, useApi, useApiMutation } from '@/lib/api';
+import { formatDateTime, ROLE_LABELS } from '@/lib/format';
+import { t } from '@/lib/i18n';
+import { createPasskey, passkeyCanceled, passkeysSupported } from '@/lib/passkeys';
+import { useSession } from '@/lib/session';
+import { FormError, PASSWORD_HINT } from '../auth/AuthLayout';
+import { SettingsCard } from './SettingsLayout';
+import { EditUserDialog } from './UsersPage';
+
+function PasswordCard() {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [error, setError] = useState<string>();
+  const change = useApiMutation('account.change_password', {
+    silent: true,
+    onSuccess: () => {
+      setCurrent('');
+      setNext('');
+      toast.success(t('Password changed. Your other sessions were signed out.'));
+    },
+  });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    setError(undefined);
+    change.mutate({ currentPassword: current, newPassword: next }, { onError: (e) => setError(e.message) });
+  };
+  return (
+    <SettingsCard title={t('Password')}>
+      <form onSubmit={submit} className="grid max-w-md gap-4">
+        <FormError message={error} />
+        <Field label={t('Current Password')} htmlFor="current">
+          <Input
+            id="current"
+            type="password"
+            autoComplete="current-password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            required
+          />
+        </Field>
+        <Field label={t('New Password')} htmlFor="new" hint={t(PASSWORD_HINT)}>
+          <Input id="new" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required />
+        </Field>
+        <Button type="submit" className="justify-self-start" disabled={change.isPending}>
+          {t('Change Password')}
+        </Button>
+      </form>
+    </SettingsCard>
+  );
+}
+
+function PasskeysCard() {
+  const queryClient = useQueryClient();
+  const passkeys = useApi('account.passkeys', {});
+  const remove = useApiMutation('account.passkey_remove', { invalidates: ['account.passkeys', 'account.me'] });
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [stepUp, setStepUp] = useState(false);
+
+  const close = () => {
+    setAdding(false);
+    setName('');
+    setPassword('');
+    setError(undefined);
+  };
+
+  const add = async (e?: FormEvent) => {
+    e?.preventDefault();
+    setError(undefined);
+    setBusy(true);
+    try {
+      const begin = await call('account.passkey_begin', { currentPassword: password });
+      const response = await createPasskey(begin.options as Record<string, unknown>);
+      await call('account.passkey_add', { state: begin.state, name: name.trim() || t('Passkey'), ...response });
+      await queryClient.invalidateQueries({ queryKey: ['account.passkeys'] });
+      await queryClient.invalidateQueries({ queryKey: ['account.me'] });
+      close();
+      toast.success(t('Passkey added. You can now sign in with it.'));
+    } catch (e) {
+      if (needsStepUp(e)) setStepUp(true);
+      else setError(passkeyCanceled(e) ? t('The passkey was not created.') : errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsCard
+      title={t('Passkeys')}
+      description={t(
+        'Sign in with your fingerprint, face or device PIN instead of a password and code. Works with iCloud Keychain, Google Password Manager, Windows Hello and security keys.',
+      )}
+    >
+      <div className="grid gap-3">
+        {passkeys.data?.map((p) => (
+          <div key={p.id} className="flex items-center justify-between gap-3 rounded-md border p-3">
+            <div className="min-w-0">
+              <div className="truncate font-medium">{p.name}</div>
+              <div className="text-xs text-muted-foreground">
+                {t('Added {date}', { date: formatDateTime(p.createdAt) })}
+                {p.lastUsedAt && ` · ${t('last used {date}', { date: formatDateTime(p.lastUsedAt) })}`}
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => remove.mutate({ id: p.id })} disabled={remove.isPending}>
+              {t('Remove')}
+            </Button>
+          </div>
+        ))}
+        {!passkeysSupported() ? (
+          <p className="text-muted-foreground">{t('This browser does not support passkeys.')}</p>
+        ) : (
+          <Button variant="outline" className="justify-self-start" onClick={() => setAdding(true)}>
+            {t('Add a Passkey')}
+          </Button>
+        )}
+      </div>
+      <Dialog open={adding} onOpenChange={(open) => !open && !busy && close()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('Add a Passkey')}</DialogTitle>
+            <DialogDescription>{t('Confirm your password, then follow your browser or device to create the passkey.')}</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={add} className="grid gap-4">
+            <FormError message={error} />
+            <Field label={t('Name')} htmlFor="passkey-name" hint={t('To tell your passkeys apart.')}>
+              <Input id="passkey-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="MacBook" autoFocus />
+            </Field>
+            <Field label={t('Current Password')} htmlFor="passkey-password">
+              <Input
+                id="passkey-password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </Field>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={close} disabled={busy}>
+                {t('Cancel')}
+              </Button>
+              <Button type="submit" disabled={busy}>
+                {busy && <Spinner className="text-primary-foreground" />} {t('Create Passkey')}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <StepUpDialog
+        open={stepUp}
+        onOpenChange={setStepUp}
+        onConfirmed={() => {
+          setStepUp(false);
+          void add();
+        }}
+      />
+    </SettingsCard>
+  );
+}
+
+function TwoFactorCard() {
+  const { user } = useSession();
+  const queryClient = useQueryClient();
+  const [setup, setSetup] = useState<TwoFactorSetup | null>(null);
+  const [qr, setQr] = useState<string>();
+  const [code, setCode] = useState('');
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [error, setError] = useState<string>();
+  const begin = useApiMutation('account.two_factor_begin', { onSuccess: setSetup });
+  const confirm = useApiMutation('account.two_factor_confirm', {
+    silent: true,
+    onSuccess: (out) => {
+      setCodes(out.recoveryCodes);
+      setSetup(null);
+      void queryClient.invalidateQueries({ queryKey: ['account.me'] });
+    },
+  });
+  useEffect(() => {
+    if (setup) void QRCode.toDataURL(setup.otpauthUrl, { margin: 1, width: 180 }).then(setQr);
+  }, [setup]);
+
+  const close = () => {
+    setSetup(null);
+    setCodes(null);
+    setCode('');
+    setError(undefined);
+  };
+
+  return (
+    <SettingsCard
+      title={t('Two-Factor Authentication')}
+      description={
+        user?.twoFactorEnabled
+          ? t('On. Signing in needs a code from your authenticator app.')
+          : t('Protect your account with a code from an authenticator app.')
+      }
+    >
+      {user?.twoFactorEnabled ? (
+        <p className="text-muted-foreground">{t('Lost your phone? Sign in with a recovery code, or ask an Admin to reset it.')}</p>
+      ) : (
+        <Button variant="outline" onClick={() => begin.mutate({})} disabled={begin.isPending}>
+          {t('Set Up')}
+        </Button>
+      )}
+      <Dialog open={!!setup || !!codes} onOpenChange={(open) => !open && !codes && close()}>
+        <DialogContent
+          showCloseButton={!codes}
+          onInteractOutside={(e) => codes && e.preventDefault()}
+          onEscapeKeyDown={(e) => codes && e.preventDefault()}
+        >
+          {codes ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{t('Save Your Recovery Codes')}</DialogTitle>
+                <DialogDescription>
+                  {t('Each code signs you in once if you lose your phone. Store them somewhere safe; they are not shown again.')}
+                </DialogDescription>
+              </DialogHeader>
+              <pre className="grid grid-cols-2 gap-1 rounded-md bg-muted p-4 font-mono text-sm">{codes.join('\n')}</pre>
+              <DialogFooter>
+                <CopyButton value={codes.join('\n')} label={t('Copy Codes')} size="default" />
+                <Button onClick={close}>{t('I Saved Them')}</Button>
+              </DialogFooter>
+            </>
+          ) : (
+            setup && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setError(undefined);
+                  confirm.mutate({ code: code.trim() }, { onError: (e) => setError(e.message) });
+                }}
+                className="grid gap-4"
+              >
+                <DialogHeader>
+                  <DialogTitle>{t('Set Up Two-Factor Authentication')}</DialogTitle>
+                  <DialogDescription>{t('Scan the code with your authenticator app, then enter the 6 digits it shows.')}</DialogDescription>
+                </DialogHeader>
+                <div className="grid justify-items-center gap-2">
+                  {qr && <img src={qr} alt={t('Authenticator QR code')} className="size-44 rounded-md border bg-white p-1" />}
+                  <code className="break-all text-center text-xs text-muted-foreground">{setup.secret}</code>
+                </div>
+                <FormError message={error} />
+                <Input
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  className="font-mono"
+                  aria-label={t('Code')}
+                  placeholder="123456"
+                  autoFocus
+                />
+                <DialogFooter>
+                  <Button type="button" variant="ghost" onClick={close}>
+                    {t('Cancel')}
+                  </Button>
+                  <Button type="submit" disabled={confirm.isPending}>
+                    {t('Turn On')}
+                  </Button>
+                </DialogFooter>
+              </form>
+            )
+          )}
+        </DialogContent>
+      </Dialog>
+    </SettingsCard>
+  );
+}
+
+function McpCard() {
+  const connections = useApi('account.mcp_connections');
+  const revoke = useApiMutation('account.revoke_mcp_connection', { invalidates: ['account.mcp_connections'] });
+  const url = `${window.location.origin}/mcp`;
+  return (
+    <SettingsCard
+      title={t('AI Apps (MCP)')}
+      description={t(
+        'Connect Claude or another MCP client to work with OpenTrail as you. Add this server URL in the app; you approve the connection here.',
+      )}
+    >
+      <div className="mb-4 flex max-w-lg gap-2">
+        <Input readOnly value={url} className="font-mono" onFocus={(e) => e.target.select()} />
+        <CopyButton value={url} size="default" />
+      </div>
+      {connections.isPending ? (
+        <Loading />
+      ) : !connections.data?.length ? (
+        <p className="text-muted-foreground">{t('No apps connected.')}</p>
+      ) : (
+        <ul className="grid gap-2">
+          {connections.data.map((c) => (
+            <li key={c.id} className="flex items-center gap-3 rounded-md border px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{c.clientName}</div>
+                <div className="text-xs text-muted-foreground">
+                  {t('Connected {date}', { date: formatDateTime(c.createdAt) })}
+                  {c.lastUsedAt ? ` · ${t('last used {date}', { date: formatDateTime(c.lastUsedAt) })}` : ''}
+                </div>
+              </div>
+              <Button variant="danger" onClick={() => revoke.mutate({ id: c.id })}>
+                {t('Disconnect')}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </SettingsCard>
+  );
+}
+
+export function AccountPage() {
+  const { user, can } = useSession();
+  const [editing, setEditing] = useState(false);
+  return (
+    <div className="grid gap-6">
+      <SettingsCard title={user?.name ?? t('You')} description={`${user?.email} · ${user ? (ROLE_LABELS[user.role] ?? user.role) : ''}`}>
+        {can('users.manage') ? (
+          <Button variant="outline" onClick={() => setEditing(true)}>
+            <Pencil /> {t('Edit Details')}
+          </Button>
+        ) : (
+          <p className="text-muted-foreground">{t('Ask an Admin to change your name, email or role.')}</p>
+        )}
+      </SettingsCard>
+      <EditUserDialog user={editing && user ? user : null} onOpenChange={setEditing} />
+      {user?.sso ? (
+        <SettingsCard
+          title={t('Single Sign-On')}
+          description={t(
+            'You sign in through the identity provider your organisation uses. Your password, two-factor and email are managed there.',
+          )}
+        >
+          {null}
+        </SettingsCard>
+      ) : (
+        <>
+          <PasskeysCard />
+          <TwoFactorCard />
+          <PasswordCard />
+          <McpCard />
+        </>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,61 @@
+# Local development and testing only. Production is the single image plus your own Postgres 18.
+#
+#   pnpm infra:up      Postgres and Mailpit for `pnpm dev`
+#   pnpm stack:up      also builds and runs the production image at http://localhost:8091
+#   pnpm stack:fresh   the same from empty, deleting the local data
+#
+# Mailpit's inbox: http://localhost:8036 (dev email goes there instead of Resend).
+
+name: opentrail
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: opentrail
+      POSTGRES_PASSWORD: opentrail
+      POSTGRES_DB: opentrail
+    ports:
+      - "127.0.0.1:5490:5432"
+    volumes:
+      # Postgres 18 keeps its data in a versioned folder under this path.
+      - postgres:/var/lib/postgresql
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opentrail -d opentrail"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:8036:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    profiles: [prod]
+    build: .
+    image: ${OPENTRAIL_IMAGE:-opentrail:local}
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      DATABASE_URL: postgres://opentrail:opentrail@postgres:5432/opentrail_prod
+      APP_SECRET: local-prod-profile-secret-change-me-0123456789
+      APP_URL: http://localhost:8091
+      ROLE: ${OPENTRAIL_ROLE:-all}
+      # development sends email to Mailpit.
+      APP_ENV: ${OPENTRAIL_APP_ENV:-production}
+      MAILPIT_URL: http://mailpit:8025
+    ports:
+      - "127.0.0.1:8091:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres:

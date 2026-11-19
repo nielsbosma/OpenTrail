@@ -1,0 +1,87 @@
+#![allow(clippy::unwrap_used)]
+
+use opentrail_core::audit::{Entry, audit, verify_chain};
+use opentrail_core::testing::{app, system_ctx};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+#[tokio::test]
+async fn chain_verifies_and_detects_edits() {
+    let Some(app) = app().await else { return };
+    let ctx = system_ctx(&app);
+    let mut conn = app.db.acquire().await.unwrap();
+    for i in 0..5 {
+        audit(&ctx, &mut conn, Entry::new("test.write", "thing", i).after(json!({ "n": i, "ratio": 0.5, "password": "x" }))).await.unwrap();
+    }
+    let report = verify_chain(&mut conn, &app.keys).await.unwrap();
+    assert!(report.valid, "{report:?}");
+    assert_eq!(report.entries, 5);
+
+    let stored: serde_json::Value =
+        sqlx::query_scalar("select after from audit_log where entity_id = '2'").fetch_one(&mut *conn).await.unwrap();
+    assert_eq!(stored["password"], "••••");
+
+    sqlx::query("alter table audit_log disable trigger audit_log_append_only").execute(&mut *conn).await.unwrap();
+    sqlx::query("update audit_log set after = '{\"n\": 99}' where entity_id = '2'").execute(&mut *conn).await.unwrap();
+    let report = verify_chain(&mut conn, &app.keys).await.unwrap();
+    assert!(!report.valid);
+    let tampered: i64 = sqlx::query_scalar("select id from audit_log where entity_id = '2'").fetch_one(&mut *conn).await.unwrap();
+    assert_eq!(report.broken_at, Some(tampered));
+}
+
+#[tokio::test]
+async fn concurrent_appends_keep_one_chain() {
+    let Some(app) = app().await else { return };
+    let mut tasks = Vec::new();
+    for i in 0..20 {
+        let app = app.clone();
+        tasks.push(tokio::spawn(async move {
+            let ctx = system_ctx(&app);
+            let mut tx = app.db.begin().await.unwrap();
+            audit(&ctx, &mut tx, Entry::new("test.concurrent", "thing", i)).await.unwrap();
+            tx.commit().await.unwrap();
+        }));
+    }
+    for t in tasks {
+        t.await.unwrap();
+    }
+    let mut conn = app.db.acquire().await.unwrap();
+    let report = verify_chain(&mut conn, &app.keys).await.unwrap();
+    assert!(report.valid && report.entries == 20, "{report:?}");
+}
+
+async fn entries(ctx: &opentrail_core::context::Ctx, conn: &mut sqlx::PgConnection, count: i32) -> i64 {
+    let mut last = 0;
+    for i in 0..count {
+        last = audit(ctx, conn, Entry::new("test.write", "thing", i)).await.unwrap();
+    }
+    last
+}
+
+#[tokio::test]
+async fn unkeyed_entries_are_refused() {
+    let Some(app) = app().await else { return };
+    let ctx = system_ctx(&app);
+    let mut conn = app.db.acquire().await.unwrap();
+    entries(&ctx, &mut conn, 3).await;
+    sqlx::query("alter table audit_log disable trigger user").execute(&mut *conn).await.unwrap();
+    assert!(sqlx::query("update audit_log set hash_alg = 'sha256'").execute(&mut *conn).await.is_err(), "the constraint refuses them");
+    sqlx::query("alter table audit_log drop constraint audit_log_keyed_only").execute(&mut *conn).await.unwrap();
+
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("select id, to_jsonb(audit_log)::text from audit_log order by id").fetch_all(&mut *conn).await.unwrap();
+    let mut prev = vec![0u8; 32];
+    for (id, row) in rows {
+        let hash = Sha256::digest([prev.as_slice(), row.as_bytes()].concat()).to_vec();
+        sqlx::query("update audit_log set hash_alg = 'sha256', prev_hash = $2, hash = $3 where id = $1")
+            .bind(id)
+            .bind(&prev)
+            .bind(&hash)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        prev = hash;
+    }
+    let report = verify_chain(&mut conn, &app.keys).await.unwrap();
+    assert!(!report.valid && report.broken_at.is_some(), "{report:?}");
+}

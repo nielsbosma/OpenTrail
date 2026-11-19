@@ -1,0 +1,31 @@
+# cargo deny check: known vulnerabilities, licenses, and crates we do not want.
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # The Marvin attack needs RSA private-key decryption. OpenTrail only verifies RS256 signatures (OIDC ID tokens, passkeys).
+  { id = "RUSTSEC-2023-0071", reason = "rsa is only used to verify signatures with public keys" },
+  # crypto-bigint 0.5 comes with p256 0.13, which only verifies ES256 signatures with public keys here.
+  { id = "RUSTSEC-2026-0387", reason = "no secret arithmetic on crypto-bigint 0.5" },
+  # chrono is unmaintained but has no known vulnerability; sqlx and schemars use it too. Moving to jiff or time is its own change.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, not vulnerable; migration to jiff or time is tracked separately" },
+]
+
+[licenses]
+version = 2
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CDLA-Permissive-2.0", "MPL-2.0", "0BSD"]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+  { crate = "openssl", reason = "rustls only; one TLS stack" },
+  { crate = "openssl-sys", reason = "rustls only; one TLS stack" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

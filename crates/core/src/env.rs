@@ -1,0 +1,218 @@
+use std::collections::HashMap;
+
+use serde::Serialize;
+
+/// The only configuration that comes from the environment: the connections and the root secret.
+/// Everything else is an Admin setting.
+pub const MIN_SETUP_CODE_LEN: usize = 24;
+
+#[derive(Clone)]
+pub struct Env {
+    pub database_url: String,
+    pub app_secret: String,
+    pub app_url: Option<String>,
+    /// Replaces the derived setup code, so a deployer can open setup with it directly.
+    pub setup_code: Option<String>,
+    pub port: u16,
+    pub role: ProcessRole,
+    pub development: bool,
+}
+
+impl std::fmt::Debug for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Env").field("app_url", &self.app_url).field("role", &self.role).finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessRole {
+    All,
+    Web,
+    Worker,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnvProblem {
+    pub name: &'static str,
+    pub message: String,
+    pub hint: &'static str,
+}
+
+fn hint(name: &str) -> &'static str {
+    match name {
+        "DATABASE_URL" => "The connection string of an empty Postgres database, e.g. postgres://user:password@host:5432/opentrail",
+        "APP_SECRET" => {
+            "A long random string that derives every encryption key. Generate it with `openssl rand -base64 48` and never change it."
+        }
+        "APP_URL" => "The public https address, e.g. https://trail.example.com",
+        "SETUP_CODE" => "Optional. A random value of at least 24 characters that replaces the setup code printed in the log",
+        _ => "",
+    }
+}
+
+/// The secrets this repository publishes for local use. They are fine on the developer's machine.
+const LOCAL_SECRETS: &[&str] = &["dev-only-secret-do-not-use-in-production-0123456789", "local-prod-profile-secret-change-me-0123456789"];
+const PLACEHOLDERS: &[&str] = &["change-me", "changeme", "do-not-use", "replace-me", "your-secret"];
+/// `openssl rand -hex 16` gives about 14 distinct characters, a phrase of repeats far fewer.
+const MIN_DISTINCT_SECRET_CHARS: usize = 8;
+
+fn is_local(url: &str) -> bool {
+    let host = url.strip_prefix("http://").unwrap_or_default().split(['/', ':']).next().unwrap_or_default();
+    matches!(host, "localhost" | "127.0.0.1")
+}
+
+fn weak_secret(secret: &str, app_url: Option<&str>) -> Option<&'static str> {
+    if LOCAL_SECRETS.contains(&secret) && app_url.is_some_and(is_local) {
+        return None;
+    }
+    let lower = secret.to_lowercase();
+    if LOCAL_SECRETS.contains(&secret) || PLACEHOLDERS.iter().any(|p| lower.contains(p)) {
+        return Some("APP_SECRET is an example value. Generate your own");
+    }
+    let distinct: std::collections::BTreeSet<char> = secret.chars().collect();
+    (distinct.len() < MIN_DISTINCT_SECRET_CHARS).then_some("APP_SECRET is too predictable. Generate a random one")
+}
+
+impl Env {
+    pub fn from_map(vars: &HashMap<String, String>) -> Result<Env, Vec<EnvProblem>> {
+        let mut problems = Vec::new();
+        let get = |name: &str| vars.get(name).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let mut required = |name: &'static str| {
+            get(name).unwrap_or_else(|| {
+                problems.push(EnvProblem { name, message: format!("{name} is not set"), hint: hint(name) });
+                String::new()
+            })
+        };
+        let database_url = required("DATABASE_URL");
+        let app_secret = required("APP_SECRET");
+
+        if !database_url.is_empty() && !(database_url.starts_with("postgres://") || database_url.starts_with("postgresql://")) {
+            problems.push(EnvProblem {
+                name: "DATABASE_URL",
+                message: "DATABASE_URL must start with postgres://".into(),
+                hint: hint("DATABASE_URL"),
+            });
+        }
+        if !app_secret.is_empty() && app_secret.chars().count() < opentrail_crypto::MIN_SECRET_LEN {
+            problems.push(EnvProblem {
+                name: "APP_SECRET",
+                message: format!("APP_SECRET must be at least {} characters", opentrail_crypto::MIN_SECRET_LEN),
+                hint: hint("APP_SECRET"),
+            });
+        }
+        let setup_code = get("SETUP_CODE");
+        if setup_code.as_ref().is_some_and(|c| c.chars().count() < MIN_SETUP_CODE_LEN) {
+            problems.push(EnvProblem {
+                name: "SETUP_CODE",
+                message: format!("SETUP_CODE must be at least {MIN_SETUP_CODE_LEN} characters"),
+                hint: hint("SETUP_CODE"),
+            });
+        }
+        let url_var = |name: &'static str, problems: &mut Vec<EnvProblem>| {
+            let value = get(name)?.trim_end_matches('/').to_string();
+            if !(value.starts_with("http://") || value.starts_with("https://")) {
+                problems.push(EnvProblem { name, message: format!("{name} must be an http(s) URL"), hint: hint(name) });
+                return None;
+            }
+            Some(value)
+        };
+        let app_url = url_var("APP_URL", &mut problems);
+        let port = get("PORT").map(|p| p.parse::<u16>()).transpose().unwrap_or_else(|_| {
+            problems.push(EnvProblem { name: "PORT", message: "PORT must be a number".into(), hint: "" });
+            None
+        });
+        let role = match get("ROLE").as_deref() {
+            None | Some("all") => ProcessRole::All,
+            Some("web") => ProcessRole::Web,
+            Some("worker") => ProcessRole::Worker,
+            Some(_) => {
+                problems.push(EnvProblem { name: "ROLE", message: "ROLE must be all, web or worker".into(), hint: "" });
+                ProcessRole::All
+            }
+        };
+        let development = get("APP_ENV").as_deref() == Some("development");
+        if !development
+            && app_secret.chars().count() >= opentrail_crypto::MIN_SECRET_LEN
+            && let Some(message) = weak_secret(&app_secret, app_url.as_deref())
+        {
+            problems.push(EnvProblem { name: "APP_SECRET", message: message.into(), hint: hint("APP_SECRET") });
+        }
+        if !development
+            && let Some(url) = &app_url
+            && url.starts_with("http://")
+            && !url.starts_with("http://localhost")
+        {
+            problems.push(EnvProblem { name: "APP_URL", message: "APP_URL must use https in production".into(), hint: hint("APP_URL") });
+        }
+
+        if !problems.is_empty() {
+            return Err(problems);
+        }
+        Ok(Env { database_url, app_secret, app_url, setup_code, port: port.unwrap_or(3000), role, development })
+    }
+
+    pub fn from_process() -> Result<Env, Vec<EnvProblem>> {
+        Env::from_map(&std::env::vars().collect())
+    }
+}
+
+pub fn app_version() -> &'static str {
+    option_env!("OPENTRAIL_VERSION").filter(|v| !v.is_empty()).unwrap_or(concat!(env!("CARGO_PKG_VERSION"), "-dev"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> HashMap<String, String> {
+        [("DATABASE_URL", "postgres://u:p@h/db"), ("APP_SECRET", "0123456789abcdef0123456789abcdef0123")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn accepts_the_minimum() {
+        let env = Env::from_map(&base()).expect("valid");
+        assert_eq!(env.port, 3000);
+        assert_eq!(env.role, ProcessRole::All);
+    }
+
+    #[test]
+    fn explains_every_problem() {
+        let mut vars = base();
+        vars.remove("DATABASE_URL");
+        vars.insert("APP_SECRET".into(), "short".into());
+        vars.insert("APP_URL".into(), "http://trail.example.com".into());
+        let problems = Env::from_map(&vars).expect_err("invalid");
+        let names: Vec<_> = problems.iter().map(|p| p.name).collect();
+        assert_eq!(names, ["DATABASE_URL", "APP_SECRET", "APP_URL"]);
+    }
+
+    #[test]
+    fn refuses_weak_secrets_in_production() {
+        let problems = |secret: &str, url: &str| {
+            let mut vars = base();
+            vars.insert("APP_SECRET".into(), secret.into());
+            vars.insert("APP_URL".into(), url.into());
+            Env::from_map(&vars).err().unwrap_or_default().iter().map(|p| p.name).collect::<Vec<_>>()
+        };
+        let public = "https://sign.example.com";
+        assert_eq!(problems(LOCAL_SECRETS[0], public), ["APP_SECRET"]);
+        assert_eq!(problems(LOCAL_SECRETS[1], public), ["APP_SECRET"]);
+        assert_eq!(problems(&"a".repeat(40), public), ["APP_SECRET"]);
+        assert_eq!(problems("please-change-me-please-change-me-please", public), ["APP_SECRET"]);
+        assert!(problems(LOCAL_SECRETS[1], "http://localhost:8090").is_empty());
+        assert!(problems(LOCAL_SECRETS[1], "http://localhost.example.com").contains(&"APP_SECRET"));
+        assert!(problems("Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycGx5d2FsZG8", public).is_empty());
+    }
+
+    #[test]
+    fn setup_code_must_be_long() {
+        let mut vars = base();
+        vars.insert("SETUP_CODE".into(), "short".into());
+        assert_eq!(Env::from_map(&vars).expect_err("too short")[0].name, "SETUP_CODE");
+        vars.insert("SETUP_CODE".into(), "a".repeat(MIN_SETUP_CODE_LEN));
+        assert!(Env::from_map(&vars).expect("valid").setup_code.is_some());
+    }
+}

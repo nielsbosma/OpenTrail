@@ -1,0 +1,223 @@
+name: CI
+
+# Runs only when an image is built, so pull requests have no checks; run them locally (see CLAUDE.md).
+# main: lint, tests on Postgres 18, supply-chain checks and an image smoke test, then amd64 and arm64 are built on native runners and pushed as ghcr.io/<owner>/opentrail:edge.
+# Releases: publishing a GitHub Release named vX.Y.Z pushes :X.Y.Z, :X.Y and :latest, then calls the
+# SLIPLANE_DEPLOY_HOOK secret if set (deploy/Connect-Github.ps1 sets it). The tag that comes with a
+# release starts no run of its own, so each release is built once.
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/opentrail
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust lint and tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: opentrail
+          POSTGRES_PASSWORD: opentrail
+          POSTGRES_DB: opentrail_test
+        ports: ['5490:5432']
+        options: >-
+          --health-cmd "pg_isready -U opentrail" --health-interval 2s --health-timeout 3s --health-retries 30
+      mailpit:
+        image: axllent/mailpit:v1.27
+        ports: ['8036:8025']
+    env:
+      TEST_DATABASE_URL: postgres://opentrail:opentrail@localhost:5490/opentrail_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: '1.99'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: The web app's API types match the server
+        run: |
+          node web/scripts/api-types.mjs
+          git diff --exit-code web/src/lib/api-types.gen.ts
+
+  supply-chain:
+    name: Advisories and licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The cargo-deny action downloads its binary anonymously inside Docker and fails when GitHub
+      # turns that download away; install-action uses the job's token and falls back to cargo install.
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-deny@0.20.2
+      - run: cargo deny --all-features check
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod --audit-level high
+
+  web:
+    name: Web lint, types, tests and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec biome ci .
+      - run: pnpm --filter @opentrail/web typecheck
+      - run: pnpm --filter @opentrail/web test
+      - run: pnpm --filter @opentrail/web build
+
+  image:
+    name: Image smoke test and publish
+    needs: [rust, web, supply-chain]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ -n "$RELEASE_TAG" ]]; then echo "value=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT";
+          else echo "value=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"; fi
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build for testing (amd64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: opentrail:local
+          build-args: OPENTRAIL_VERSION=${{ steps.version.outputs.value }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
+      - name: Smoke test with Postgres 18
+        env:
+          OPENTRAIL_IMAGE: opentrail:local
+        run: |
+          docker compose up -d --wait postgres mailpit
+          docker compose --profile prod up -d --no-build app
+          for i in $(seq 1 60); do curl -fsS http://localhost:8091/api/ready && break; sleep 2; done
+          curl -fsS http://localhost:8091/api/ready
+          curl -fsSI http://localhost:8091/ | grep -i "content-security-policy"
+          curl -fsS http://localhost:8091/.well-known/oauth-authorization-server | grep -q authorization_endpoint
+          docker compose logs app | grep -q "setup code"
+          docker compose logs app | grep -q "the database user can create roles"
+          test "$(docker inspect --format '{{.Config.User}}' opentrail:local)" = nonroot
+      - name: Logs
+        if: failure()
+        run: docker compose logs app | tail -200
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: image
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push by digest
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: OPENTRAIL_VERSION=${{ needs.image.outputs.version }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+      - name: Keep the digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir digests
+          touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish the image
+    needs: [image, build]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the multi-arch image (amd64, arm64)
+        working-directory: digests
+        env:
+          VERSION: ${{ needs.image.outputs.version }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == release ]]; then
+            tags=(-t "$IMAGE:$VERSION" -t "$IMAGE:${VERSION%.*}" -t "$IMAGE:latest")
+          else
+            tags=(-t "$IMAGE:edge")
+          fi
+          sources=()
+          for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
+          test "${#sources[@]}" -eq 2
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+      - name: Deploy to Sliplane
+        if: github.event_name == 'release'
+        env:
+          DEPLOY_HOOK: ${{ secrets.SLIPLANE_DEPLOY_HOOK }}
+        run: |
+          if [[ -z "$DEPLOY_HOOK" ]]; then echo "No SLIPLANE_DEPLOY_HOOK secret, skipping the deploy."; exit 0; fi
+          curl -fsS -o /dev/null --retry 3 "$DEPLOY_HOOK"
+          echo "Sliplane is redeploying the service's tag."
