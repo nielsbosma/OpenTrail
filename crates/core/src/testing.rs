@@ -44,3 +44,16 @@ async fn app_with(development: bool) -> Option<Arc<App>> {
 pub fn system_ctx(app: &Arc<App>) -> Ctx {
     Ctx::new(app.clone(), Surface::System)
 }
+
+/// Someone signed in to the web app with this role. No user row exists behind it.
+pub fn signed_in(app: &Arc<App>, role: crate::permissions::Role) -> Ctx {
+    Ctx::new(app.clone(), Surface::Web).with_actor(crate::context::Actor {
+        user_id: uuid::Uuid::now_v7(),
+        email: format!("{}@example.com", role.as_str()),
+        name: role.as_str().into(),
+        role,
+        permissions: role.permissions(),
+        must_enable_two_factor: false,
+        credential: crate::context::Credential::Session,
+    })
+}

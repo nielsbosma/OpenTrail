@@ -8,7 +8,7 @@ OpenTrail records sessions, shows them, and serves them to agents through REST, 
 
 ## Golden rules
 
-- **All logic lives in a service** in `crates/core/src/services`: a struct implementing `Service` with `Input`, `Output` (both `JsonSchema`) and a `META`. Register it in `services::registry()`. The RPC endpoint and MCP pick it up from there; REST routes are a table in `crates/server/src/rest.rs`. Handlers never touch the database themselves.
+- **All logic lives in a service** in `crates/core/src/services`: a struct implementing `Service` with `Input`, `Output` (both `JsonSchema`) and a `META`. Register it in `services::registry()`. The RPC endpoint and MCP pick it up from there; REST routes are a table in `crates/server/src/rest.rs`. Handlers never touch the database themselves. The one exception is ingest (`crates/core/src/recording/ingest.rs`): it has no actor, takes binary gzip, and is called only by `crates/server/src/ingest.rs`.
 - **Every service declares `Access`**: a `Permission`, `Authenticated` or `Public`. Add permissions in `permissions.rs` and to the roles that need them. The UI only hides things; the service decides.
 - **Every change calls `audit(ctx, conn, Entry::new(action, entity_type, id)...)`.** Actions are `<area>.<verb_snake>`. Pass `secret_keys` for anything secret.
 - **Descriptions are written for a model**: they become MCP tool descriptions. Full sentences that say what it does and when to use it.
@@ -18,7 +18,8 @@ OpenTrail records sessions, shows them, and serves them to agents through REST, 
 ## Security habits
 
 - Never log or return secrets, tokens or recorded content. Errors shown to users come from `AppError` messages; causes stay in the log.
-- Encrypt new secrets with `ctx.keys().encrypt_str(KeyPurpose::..., context, ...)` and a context that names the row, so ciphertext cannot be moved between rows. Recordings will use per-project data keys wrapped with `KeyPurpose::RecordingKek`, bound to `project:{id}`.
+- Encrypt new secrets with `ctx.keys().encrypt_str(KeyPurpose::..., context, ...)` and a context that names the row, so ciphertext cannot be moved between rows. Recordings use per-project data keys wrapped with `KeyPurpose::RecordingKek`, bound to `project:{id}`; chunks and bodies are sealed with AAD naming their session (see `recording/mod.rs`).
+- Every recorded string passes `recording::mask::sanitize` on the server, whatever the SDK did. A new extracted field goes through it too.
 - Outbound HTTP to anything configurable goes through `ctx.app.http.public` (blocks private addresses, no redirects). `internal` is only for development mail and a local identity provider.
 - Compare secrets with `constant_time_eq`. Store tokens as a MAC or hash, never in the clear.
 - Anything the public can reach is rate-limited and bounded (attempts, expiry, size).
@@ -51,6 +52,7 @@ CI runs only when an image is built (`main` and releases), so pull requests have
 ```sh
 pnpm infra:up
 pnpm lint && pnpm typecheck
+pnpm test:e2e     # the test site recorded end to end, in Docker
 TEST_DATABASE_URL=postgres://opentrail:opentrail@localhost:5490/opentrail_test pnpm test
 cargo fmt --all --check
 ```

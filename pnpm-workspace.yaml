@@ -1,5 +1,15 @@
 packages:
   - web
+  - sdk
+  - testsite/e2e
 
 onlyBuiltDependencies:
   - esbuild
+
+# rrweb's packages depend on each other with ^ ranges; keep them on the one reviewed version.
+overrides:
+  rrweb: 2.2.0
+  '@rrweb/types': 2.2.0
+  '@rrweb/utils': 2.2.0
+  rrweb-snapshot: 2.2.0
+  rrdom: 2.2.0

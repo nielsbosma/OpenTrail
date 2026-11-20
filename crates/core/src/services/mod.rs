@@ -2,6 +2,8 @@ pub mod admin;
 pub mod auth;
 pub mod oauth;
 pub mod passkeys;
+pub mod projects;
+pub mod sessions;
 pub mod setup;
 pub mod sso;
 pub mod system;
@@ -85,6 +87,22 @@ pub fn registry() -> Vec<Box<dyn DynService>> {
         erase::<oauth::Deny>(),
         erase::<oauth::ListConnections>(),
         erase::<oauth::RevokeConnection>(),
+        erase::<projects::List>(),
+        erase::<projects::Get>(),
+        erase::<projects::Create>(),
+        erase::<projects::Update>(),
+        erase::<projects::Archive>(),
+        erase::<projects::CreateKey>(),
+        erase::<projects::RevokeKey>(),
+        erase::<sessions::List>(),
+        erase::<sessions::Get>(),
+        erase::<sessions::GetTimeline>(),
+        erase::<sessions::GetReplay>(),
+        erase::<sessions::RequestBody>(),
+        erase::<sessions::Delete>(),
+        erase::<sessions::DeleteUser>(),
+        erase::<sessions::Search>(),
+        erase::<sessions::GroupEvents>(),
     ]
 }
 
@@ -116,6 +134,7 @@ mod tests {
         "oauth.approve",
         "oauth.describe",
         "oauth.deny",
+        "sessions.replay",
         "users.reset_two_factor",
     ];
 

@@ -16,7 +16,11 @@ Record what people do on your site (the page, mouse, clicks, console and network
 
 ## Status
 
-OpenTrail is being built in phases. **Phase 1 is done**: the service itself, with accounts, single sign-on, roles, API keys, OAuth for MCP clients, a hash-chained audit log, the admin settings, the image and the deploy. Recording (an rrweb snippet and an ingest endpoint), the replay viewer and the query API come in the next phases. Until then there is nothing to record with.
+OpenTrail is being built in phases.
+
+- **Phase 1 is done**: the service itself, with accounts, single sign-on, roles, API keys, OAuth for MCP clients, a hash-chained audit log, the admin settings, the image and the deploy.
+- **Phase 2 is done**: recording. There is a browser SDK (`/sdk.js` or `@opentrail/browser`) and an ingest endpoint, with encrypted storage and server-side masking. The session list and the player show the events, console, network and errors, and REST and MCP calls read and count them. Retention and deletion work per project.
+- **Next**: a read-only SQL login per project, and single sign-on from Bosma ERP.
 
 ## What it is, and what it is not
 
@@ -68,6 +72,42 @@ Each project will get its own read-only SQL login (`ot_<install>_<project>`), so
 
 The container log prints a **setup code**, so nobody else can claim a fresh install (or set your own with `SETUP_CODE` and open `/setup#code=…`). Enter it and create the first admin. Email through **Resend** or your own **SMTP** server is optional when everyone signs in with single sign-on. Everything else is set in the browser, and any setting can be pinned with an environment variable such as `OPENTRAIL_SECURITY_ENFORCE_TWO_FACTOR=true`. An empty variable pins nothing.
 
+## Record a site
+
+Create a project under **Settings → Projects** and list the origins that may send recordings, such as `https://app.example.com`. The project page shows its snippet; put it in the `<head>` of every page:
+
+```html
+<script src="https://trail.example.com/sdk.js" data-key="trk_pub_..." async></script>
+```
+
+The key is public: it can only send recordings to its own project, and only from the allowed origins. With a bundler, use `@opentrail/browser` and call `init({ key, host })`. Either way, `OpenTrail.identify(userId)` ties the session to your own id for the user (never an email), and `OpenTrail.track(name, props)` records an event of your own.
+
+Masking:
+
+- **Inputs** are always masked; passwords cannot be unmasked. `data-trail-unmask` shows an input or text.
+- **Text and elements**: `data-trail-mask` hides text, and `data-trail-block` leaves an element out of the recording entirely.
+- **On the server**: Swedish personal identity numbers and card numbers are replaced in every recorded string. Event handlers and `javascript:` URLs are removed, and credential-like query values (`token`, `code`, `key` and similar) are masked in every URL.
+- **Not recorded**: request headers. Request and response bodies are recorded only when both the project and the snippet ask for them.
+
+Each tab sends a gzip batch every two seconds. When the page is hidden or left, it sends what is left at once as plain JSON, since the page may be gone before compression finishes. A session ends after 30 minutes without activity, after 4 hours, or at 100 MB.
+
+What agents get:
+
+| Call | What it returns |
+| --- | --- |
+| `sessions.list` | Sessions by project, time, user, visited URL, browser, release, duration, errors or failed requests |
+| `sessions.get` | One session with its tabs and pages |
+| `sessions.timeline` | Everything in one session in time order: pages, clicks and inputs (with each element's role, name, test id and component), console, network, errors, Web Vitals and custom events |
+| `events.search` | One kind of event across sessions, such as every failed request to a URL |
+| `events.group` | Counts by message, URL path, status or name, with an example session |
+| `sessions.request_body` | A recorded request and response body |
+
+The same calls are REST routes under `/api/v1` (see the OpenAPI document) and MCP tools.
+
+### The test site
+
+`testsite/` is a site to record. Its scenarios cover clicks, forms, masked and blocked text, SPA navigation and a full page load. They also cover console levels, thrown errors and rejections, fetch and XHR answering 200, 404 and 500, failed and slow requests, secrets in headers and URLs, DOM changes, an iframe, a canvas and custom events. `pnpm test:e2e` builds the image and starts it on an empty database next to the test site. Playwright then drives every scenario in Chromium and checks through the API what was recorded and that nothing secret was. To look at it yourself, run `pnpm testsite` and open `http://localhost:8092/?key=trk_pub_...&host=http://localhost:3000&scenario=all`.
+
 ## Sign-in and roles
 
 - Passwords (Argon2id) with TOTP two-factor and recovery codes, passkeys, and single sign-on through any OpenID Connect provider (Microsoft Entra ID, Google, Okta and others).
@@ -86,7 +126,7 @@ The OpenAPI document is at `/api/v1/openapi.json`, and the **API Explorer** at `
 
 ## How it fits together
 
-Rust (axum, sqlx) in `crates/`: `crypto` (keys, encryption, tokens; no I/O), `db` (migrations), `core` (services, sign-in, email, the job worker) and `server` (HTTP, REST, MCP). The web app is React, Vite and Tailwind in `web/`. Every feature is a service, so the web app, REST and MCP all go through the same permission checks and audit trail.
+Rust (axum, sqlx) in `crates/`: `crypto` (keys, encryption, tokens; no I/O), `db` (migrations), `core` (services, sign-in, recording, email, the job worker) and `server` (HTTP, ingest, REST, MCP). The web app is React, Vite and Tailwind in `web/`, the browser SDK is in `sdk/`, and the scenario site and its Playwright run are in `testsite/`. Every feature is a service, so the web app, REST and MCP all go through the same permission checks and audit trail.
 
 ## Security
 

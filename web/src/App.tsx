@@ -13,11 +13,14 @@ import { ForgotPasswordPage, ResetPasswordPage } from '@/pages/auth/PasswordPage
 import { TwoFactorRequiredPage } from '@/pages/auth/TwoFactorRequiredPage';
 import { ConsentPage } from '@/pages/ConsentPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { SessionPage } from '@/pages/SessionPage';
+import { SessionsPage } from '@/pages/SessionsPage';
 import { SetupPage } from '@/pages/SetupPage';
 import { AccountPage } from '@/pages/settings/AccountPage';
 import { AdminSettingsPage } from '@/pages/settings/AdminSettingsPage';
 import { ApiKeysPage } from '@/pages/settings/ApiKeysPage';
 import { AuditPage } from '@/pages/settings/AuditPage';
+import { ProjectsPage } from '@/pages/settings/ProjectsPage';
 import { SettingsLayout } from '@/pages/settings/SettingsLayout';
 import { SystemPage } from '@/pages/settings/SystemPage';
 import { UsersPage } from '@/pages/settings/UsersPage';
@@ -55,6 +58,11 @@ function RequireSession({ children }: { children: ReactNode }) {
   return children;
 }
 
+function Home() {
+  const { can } = useSession();
+  return <Navigate to={can('sessions.read') ? '/sessions' : '/settings/account'} replace />;
+}
+
 export function App() {
   return (
     <Routes>
@@ -87,12 +95,15 @@ export function App() {
           </RequireSession>
         }
       >
-        <Route index element={<Navigate to="/settings/account" replace />} />
+        <Route index element={<Home />} />
+        <Route path="/sessions" element={<SessionsPage />} />
+        <Route path="/sessions/:id" element={<SessionPage />} />
         <Route path="/settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="/settings/account" replace />} />
           <Route path="account" element={<AccountPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="api-keys" element={<ApiKeysPage />} />
+          <Route path="projects" element={<ProjectsPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="system" element={<SystemPage />} />
           <Route path="admin/:group" element={<AdminSettingsPage />} />

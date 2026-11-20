@@ -88,7 +88,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec biome ci .
-      - run: pnpm --filter @opentrail/web typecheck
+      - run: pnpm --filter @opentrail/web --filter @opentrail/browser typecheck
       - run: pnpm --filter @opentrail/web test
       - run: pnpm --filter @opentrail/web build
 
@@ -130,9 +130,17 @@ jobs:
           docker compose logs app | grep -q "setup code"
           docker compose logs app | grep -q "the database user can create roles"
           test "$(docker inspect --format '{{.Config.User}}' opentrail:local)" = nonroot
+      - name: Record the test site end to end
+        env:
+          OPENTRAIL_IMAGE: opentrail:local
+        run: |
+          docker compose --profile e2e build testsite e2e
+          docker compose --profile e2e run --rm e2e
       - name: Logs
         if: failure()
-        run: docker compose logs app | tail -200
+        run: |
+          docker compose logs app | tail -200
+          docker compose --profile e2e logs e2e-app | tail -200
 
   build:
     name: Build ${{ matrix.arch }}

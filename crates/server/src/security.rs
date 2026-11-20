@@ -17,8 +17,53 @@ use crate::error::json_error;
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; \
     connect-src 'self'; worker-src 'self' blob:; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'";
 
+/// The app shell's policy, with the recorded sites' origins added for what the player shows:
+/// their images, fonts, styles and media. Scripts still come only from here, and the player's frame
+/// runs none.
+fn html_csp(origins: &str) -> Option<HeaderValue> {
+    HeaderValue::from_str(&format!(
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'{origins}; img-src 'self' data: blob:{origins}; \
+         font-src 'self' data:{origins}; media-src 'self' blob:{origins}; connect-src 'self'; worker-src 'self' blob:; frame-src 'self'; \
+         frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
+    ))
+    .ok()
+}
+
+/// Every project's allowed origins as CSP sources, read at most every half minute.
+#[derive(Default)]
+pub struct PlayerOrigins(RwLock<(Option<Instant>, Arc<str>)>);
+
+async fn player_origins(state: &AppState) -> Arc<str> {
+    let (read_at, current) = state.player_origins.0.read().map(|p| p.clone()).unwrap_or_else(|e| e.into_inner().clone());
+    if read_at.is_some_and(|at| at.elapsed() < Duration::from_secs(30)) {
+        return current;
+    }
+    let Some(mut conn) = state.app.db.try_acquire() else { return current };
+    let Ok(origins) = sqlx::query_scalar::<_, String>("select distinct unnest(allowed_origins) from projects order by 1 limit 200")
+        .fetch_all(&mut *conn)
+        .await
+    else {
+        return current;
+    };
+    // Origins were normalized when saved; this keeps anything else out of the header.
+    let sources: String = origins
+        .iter()
+        .filter(|o| o.bytes().all(|b| b.is_ascii_alphanumeric() || b".:/-[]".contains(&b)))
+        .map(|o| format!(" {o}"))
+        .collect();
+    let sources: Arc<str> = sources.into();
+    if let Ok(mut slot) = state.player_origins.0.write() {
+        *slot = (Some(Instant::now()), sources.clone());
+    }
+    sources
+}
+
 pub async fn headers(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
+    let is_html = response.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("text/html"));
+    if is_html && let Some(csp) = html_csp(&player_origins(&state).await) {
+        response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, csp);
+    }
     let h = response.headers_mut();
     h.entry(header::CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static(CSP));
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
@@ -303,6 +348,13 @@ mod tests {
         let allowed = (0..20).filter(|_| limiter.allow(AUTH, ip)).count();
         assert_eq!(allowed, 10);
         assert!(limiter.allow(AUTH, "203.0.113.2".parse().ok()), "other addresses are unaffected");
+    }
+
+    #[test]
+    fn the_player_policy_adds_origins_but_no_scripts() {
+        let csp = html_csp(" https://shop.example").and_then(|v| v.to_str().ok().map(str::to_string)).unwrap_or_default();
+        assert!(csp.contains("img-src 'self' data: blob: https://shop.example;"), "{csp}");
+        assert!(csp.contains("script-src 'self';") && csp.contains("frame-ancestors 'none'"), "{csp}");
     }
 
     #[test]

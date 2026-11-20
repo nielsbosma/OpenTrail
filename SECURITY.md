@@ -32,6 +32,12 @@ It does not protect against someone who holds `APP_SECRET` together with the dat
 **Roles**
 - Admin, Developer, Viewer and Auditor, enforced in the service layer. The UI only hides what the server would refuse anyway. MCP clients act with the user's own permissions, and public services are never tools.
 
+**Recordings**
+- Ingest (`/i/v1/batch`) takes a public key, so it is bounded: 512 kB compressed and 8 MB decompressed per batch, 20,000 events, timestamps within a day of the server's clock, a rate limit per address, a monthly session quota per project, and sessions that stop at 4 hours or 100 MB. Only the project's allowed origins may send. A session id cannot be continued from another project, and a repeated batch changes nothing.
+- The SDK masks every input (passwords always), and `data-trail-mask` and `data-trail-block` keep text and elements out. The server does not rely on that. In every recorded string it masks Swedish personal identity and coordination numbers (date and check digit) and card numbers (network prefix and Luhn). It removes `on*` attributes and `javascript:`, `vbscript:` and `data:text/html` URLs, and masks credential-like query values and URL user info. Headers are never recorded, and bodies only when both the project and the snippet ask for them (10 kB each).
+- Each project has its own random data key, wrapped with the recording key-encryption key and bound to the project. The recorded DOM stream is stored as gzip sealed with AES-256-GCM, bound to its session, tab and sequence number, and so are request and response bodies. The fields extracted for queries (pages, element names, console messages, request URLs and statuses, error messages) are stored masked but not encrypted, so they can be filtered and counted in SQL.
+- The player shows recorded pages in a sandboxed frame that runs no scripts. The app's CSP allows images, fonts, styles and media from the projects' allowed origins; scripts still come only from OpenTrail.
+
 **Database access for agents**
 - Per-project SQL logins will be separate Postgres roles with `NOINHERIT`, a connection limit, `default_transaction_read_only` and a statement timeout, granted only their project's views. Creating them needs `CREATEROLE`; without it, SQL access stays off. The probe that checks this creates a throwaway role inside a transaction and rolls it back.
 

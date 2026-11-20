@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowUpCircle, Braces, LogOut, Menu, Moon, PanelLeftClose, PanelLeftOpen, Settings, Sun } from 'lucide-react';
+import { ArrowUpCircle, Braces, LogOut, Menu, MonitorPlay, Moon, PanelLeftClose, PanelLeftOpen, Settings, Sun } from 'lucide-react';
 import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router';
 import { Logo } from '@/components/common';
@@ -99,6 +99,11 @@ function Sidebar({ onNavigate, onClose }: { onNavigate?: () => void; onClose: ()
         </Button>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 px-2 py-1" aria-label={t('Main')}>
+        {can('sessions.read') && (
+          <NavLink to="/sessions" className={linkClass} onClick={onNavigate}>
+            <MonitorPlay className="size-4 opacity-80" /> {t('Sessions')}
+          </NavLink>
+        )}
         <NavLink to="/settings" className={linkClass} onClick={onNavigate}>
           <Settings className="size-4 opacity-80" /> {t('Settings')}
         </NavLink>

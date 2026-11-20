@@ -350,6 +350,69 @@ export type AuthVerifyTwoFactorOutput = {
   status: "passkey_required";
 };
 
+export type EventKind = "page" | "interaction" | "console" | "network" | "error" | "vital" | "custom";
+
+export type GroupBy = "message" | "path" | "status" | "name";
+
+export type EventsGroupInput = {
+  by: GroupBy;
+  from?: string | null;
+  kind: EventKind;
+  /** At most 500; 50 if left out. */
+  limit?: number | null;
+  projectId?: string | null;
+  /** The same text filter as events.search. */
+  text?: string | null;
+  to?: string | null;
+};
+
+export type EventGroup = {
+  count: number;
+  /** One session it happened in, the latest. */
+  exampleSessionId: string;
+  firstSeen: string;
+  lastSeen: string;
+  sessions: number;
+  value?: string | null;
+};
+
+export type EventsGroupOutput = Array<EventGroup>;
+
+export type EventsSearchInput = {
+  /** The `next` value of the previous page, for older events. */
+  before?: string | null;
+  /** Network requests that failed without a response or answered 400 or more. */
+  failed?: boolean | null;
+  from?: string | null;
+  kind: EventKind;
+  /** Console level: log, info, warn, error or debug. */
+  level?: string | null;
+  /** At most 1000; 100 if left out. */
+  limit?: number | null;
+  /** Network requests with at least this status. 400 finds failures; failed requests without a response have status 0 and are found with `failed`. */
+  minStatus?: number | null;
+  projectId?: string | null;
+  /** Part of the main text, case-insensitive: the URL of pages and requests, the message of console output and errors, the element's name, test id or component for interactions, the name of vitals and custom events. */
+  text?: string | null;
+  to?: string | null;
+};
+
+export type EventRow = {
+  data: unknown;
+  kind: string;
+  sessionId: string;
+  ts: string;
+  windowId: string;
+};
+
+export type EventsSearchOutput = SearchPage;
+
+export type SearchPage = {
+  items: Array<EventRow>;
+  /** Pass as `before` for the next, older page. */
+  next?: string | null;
+};
+
 export type OauthApproveInput = {
   /** The `request` parameter of the consent page. */
   request: string;
@@ -382,6 +445,274 @@ export type ConsentView = {
   redirectDomain: string;
   /** Where the browser goes after approval. Show it, so a look-alike client name cannot hide it. */
   redirectHost: string;
+};
+
+export type ProjectsArchiveInput = {
+  /** False restores an archived project. */
+  archived?: boolean;
+  id: string;
+};
+
+export type ProjectsArchiveOutput = ProjectView;
+
+export type ProjectView = {
+  /** Exact origins a browser may send recordings from. */
+  allowedOrigins: Array<string>;
+  archived: boolean;
+  captureBodies: boolean;
+  captureCanvas: boolean;
+  createdAt: string;
+  id: string;
+  monthlySessionQuota: number;
+  name: string;
+  /** Sessions recorded in the last 30 days. */
+  recentSessions: number;
+  retentionDays: number;
+};
+
+export type ProjectsCreateInput = {
+  /** Origins like `https://app.example.com` that may send recordings. */
+  allowedOrigins?: Array<string>;
+  name: string;
+  retentionDays?: number | null;
+};
+
+export type KeyView = {
+  createdAt: string;
+  id: string;
+  /** Public: it goes in the page's source and can only send recordings to this project. */
+  key: string;
+  lastUsedAt?: string | null;
+  name: string;
+};
+
+export type ProjectsCreateOutput = ProjectDetail;
+
+export type ProjectDetail = {
+  /** Exact origins a browser may send recordings from. */
+  allowedOrigins: Array<string>;
+  archived: boolean;
+  captureBodies: boolean;
+  captureCanvas: boolean;
+  createdAt: string;
+  id: string;
+  keys: Array<KeyView>;
+  monthlySessionQuota: number;
+  name: string;
+  /** Sessions recorded in the last 30 days. */
+  recentSessions: number;
+  retentionDays: number;
+};
+
+export type ProjectsCreateKeyInput = {
+  name: string;
+  projectId: string;
+};
+
+export type ProjectsCreateKeyOutput = KeyView;
+
+export type ProjectsGetInput = {
+  id: string;
+};
+
+export type ProjectsGetOutput = ProjectDetail;
+
+export type ProjectsListInput = {
+  /** Include archived projects. */
+  includeArchived?: boolean;
+};
+
+export type ProjectsListOutput = Array<ProjectView>;
+
+export type ProjectsRevokeKeyInput = {
+  id: string;
+};
+
+export type ProjectsRevokeKeyOutput = Ok_;
+
+export type ProjectsUpdateInput = {
+  allowedOrigins?: Array<string> | null;
+  /** Store request and response bodies (at most 10 kB each, masked and encrypted). */
+  captureBodies?: boolean | null;
+  captureCanvas?: boolean | null;
+  id: string;
+  monthlySessionQuota?: number | null;
+  name?: string | null;
+  retentionDays?: number | null;
+};
+
+export type ProjectsUpdateOutput = ProjectView;
+
+export type SessionsDeleteInput = {
+  id: string;
+};
+
+export type SessionsDeleteOutput = Deleted;
+
+export type Deleted = {
+  deleted: number;
+};
+
+export type SessionsDeleteUserInput = {
+  projectId: string;
+  /** The id the site passed to `identify()`. */
+  userRef: string;
+};
+
+export type SessionsDeleteUserOutput = Deleted;
+
+export type SessionsGetInput = {
+  id: string;
+};
+
+export type PageView = {
+  title?: string | null;
+  ts: string;
+  url: string;
+  windowId: string;
+};
+
+export type WindowView = {
+  chunks: number;
+  firstTs: string;
+  lastTs: string;
+  windowId: string;
+};
+
+export type SessionsGetOutput = SessionDetail;
+
+export type SessionDetail = {
+  browser?: string | null;
+  /** Stored size, compressed and encrypted. */
+  bytes: number;
+  durationSeconds: number;
+  errorCount: number;
+  eventCount: number;
+  failedRequestCount: number;
+  firstUrl?: string | null;
+  id: string;
+  ipPrefix?: string | null;
+  lang?: string | null;
+  lastEventAt: string;
+  os?: string | null;
+  pageCount: number;
+  pages: Array<PageView>;
+  projectId: string;
+  projectName: string;
+  release?: string | null;
+  screenHeight?: number | null;
+  screenWidth?: number | null;
+  startedAt: string;
+  /** The recording stopped early: the session ran over 4 hours or 100 MB. */
+  truncated: boolean;
+  /** The id the site passed to `identify()`, if it did. */
+  userRef?: string | null;
+  /** Browser tabs in the session, each a separate recording. */
+  windows: Array<WindowView>;
+};
+
+export type SessionsListInput = {
+  /** The `next` value of the previous page. */
+  before?: string | null;
+  browser?: string | null;
+  /** Sessions that started at or after this time. */
+  from?: string | null;
+  /** Only sessions with (true) or without (false) JavaScript errors. */
+  hasErrors?: boolean | null;
+  /** Only sessions with (true) or without (false) requests that failed or answered 400 or more. */
+  hasFailedRequests?: boolean | null;
+  /** At most 200; 50 if left out. */
+  limit?: number | null;
+  minDurationSeconds?: number | null;
+  projectId?: string | null;
+  release?: string | null;
+  /** Sessions that started before this time. */
+  to?: string | null;
+  /** Part of the URL of any page the session visited, case-insensitive. */
+  url?: string | null;
+  userRef?: string | null;
+};
+
+export type SessionSummary = {
+  browser?: string | null;
+  /** Stored size, compressed and encrypted. */
+  bytes: number;
+  durationSeconds: number;
+  errorCount: number;
+  eventCount: number;
+  failedRequestCount: number;
+  firstUrl?: string | null;
+  id: string;
+  ipPrefix?: string | null;
+  lang?: string | null;
+  lastEventAt: string;
+  os?: string | null;
+  pageCount: number;
+  projectId: string;
+  projectName: string;
+  release?: string | null;
+  screenHeight?: number | null;
+  screenWidth?: number | null;
+  startedAt: string;
+  /** The recording stopped early: the session ran over 4 hours or 100 MB. */
+  truncated: boolean;
+  /** The id the site passed to `identify()`, if it did. */
+  userRef?: string | null;
+  windows: number;
+};
+
+export type SessionsListOutput = SessionPage;
+
+export type SessionPage = {
+  items: Array<SessionSummary>;
+  /** Pass as `before` for the next, older page. Absent on the last page. */
+  next?: string | null;
+};
+
+export type SessionsReplayInput = {
+  /** Chunks after this sequence number, for paging. */
+  afterSeq?: number | null;
+  id: string;
+  windowId: string;
+};
+
+export type SessionsReplayOutput = Replay;
+
+export type Replay = {
+  /** rrweb events, ready for the rrweb player. */
+  events: Array<unknown>;
+  /** Pass as `afterSeq` for the rest. Absent when this was the end. */
+  nextSeq?: number | null;
+};
+
+export type SessionsRequestBodyInput = {
+  /** The `id` of a network event. */
+  id: number;
+};
+
+export type SessionsRequestBodyOutput = Bodies;
+
+export type Bodies = {
+  requestBody?: string | null;
+  responseBody?: string | null;
+};
+
+export type SessionsTimelineInput = {
+  /** Events after this time, for paging. */
+  after?: string | null;
+  id: string;
+  /** Only these kinds. All of them if left out. */
+  kinds?: Array<EventKind> | null;
+  /** At most 5000; 1000 if left out. */
+  limit?: number | null;
+};
+
+export type SessionsTimelineOutput = Timeline;
+
+export type Timeline = {
+  items: Array<EventRow>;
+  /** Pass as `after` for the next page. Absent on the last page. */
+  next?: string | null;
 };
 
 export type Group = "org" | "email" | "security" | "updates" | "sso";
@@ -605,9 +936,25 @@ export interface Services {
   "auth.sso_start": { kind: "mutation"; input: AuthSsoStartInput; output: AuthSsoStartOutput };
   "auth.sso_status": { kind: "query"; input: AuthSsoStatusInput; output: AuthSsoStatusOutput };
   "auth.verify_two_factor": { kind: "mutation"; input: AuthVerifyTwoFactorInput; output: AuthVerifyTwoFactorOutput };
+  "events.group": { kind: "query"; input: EventsGroupInput; output: EventsGroupOutput };
+  "events.search": { kind: "query"; input: EventsSearchInput; output: EventsSearchOutput };
   "oauth.approve": { kind: "mutation"; input: OauthApproveInput; output: OauthApproveOutput };
   "oauth.deny": { kind: "mutation"; input: OauthDenyInput; output: OauthDenyOutput };
   "oauth.describe": { kind: "query"; input: OauthDescribeInput; output: OauthDescribeOutput };
+  "projects.archive": { kind: "mutation"; input: ProjectsArchiveInput; output: ProjectsArchiveOutput };
+  "projects.create": { kind: "mutation"; input: ProjectsCreateInput; output: ProjectsCreateOutput };
+  "projects.create_key": { kind: "mutation"; input: ProjectsCreateKeyInput; output: ProjectsCreateKeyOutput };
+  "projects.get": { kind: "query"; input: ProjectsGetInput; output: ProjectsGetOutput };
+  "projects.list": { kind: "query"; input: ProjectsListInput; output: ProjectsListOutput };
+  "projects.revoke_key": { kind: "mutation"; input: ProjectsRevokeKeyInput; output: ProjectsRevokeKeyOutput };
+  "projects.update": { kind: "mutation"; input: ProjectsUpdateInput; output: ProjectsUpdateOutput };
+  "sessions.delete": { kind: "mutation"; input: SessionsDeleteInput; output: SessionsDeleteOutput };
+  "sessions.delete_user": { kind: "mutation"; input: SessionsDeleteUserInput; output: SessionsDeleteUserOutput };
+  "sessions.get": { kind: "query"; input: SessionsGetInput; output: SessionsGetOutput };
+  "sessions.list": { kind: "query"; input: SessionsListInput; output: SessionsListOutput };
+  "sessions.replay": { kind: "query"; input: SessionsReplayInput; output: SessionsReplayOutput };
+  "sessions.request_body": { kind: "query"; input: SessionsRequestBodyInput; output: SessionsRequestBodyOutput };
+  "sessions.timeline": { kind: "query"; input: SessionsTimelineInput; output: SessionsTimelineOutput };
   "settings.get": { kind: "query"; input: SettingsGetInput; output: SettingsGetOutput };
   "settings.send_test_email": { kind: "mutation"; input: SettingsSendTestEmailInput; output: SettingsSendTestEmailOutput };
   "settings.update": { kind: "mutation"; input: SettingsUpdateInput; output: SettingsUpdateOutput };

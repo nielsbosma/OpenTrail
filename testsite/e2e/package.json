@@ -1,0 +1,13 @@
+{
+  "name": "@opentrail/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Drives the test site in a real browser and checks through the API what OpenTrail recorded.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}

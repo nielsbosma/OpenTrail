@@ -18,6 +18,7 @@ pub mod i18n;
 pub mod jobs;
 pub mod oauth;
 pub mod oidc;
+pub mod recording;
 pub mod services;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

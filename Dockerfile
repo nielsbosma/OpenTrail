@@ -11,7 +11,9 @@ RUN npm install -g corepack@0.36.0 && corepack enable
 WORKDIR /src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY web/package.json web/
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile --filter @opentrail/web
+COPY sdk/package.json sdk/
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile --filter @opentrail/web --filter @opentrail/browser
+COPY sdk sdk
 COPY web web
 RUN pnpm --filter @opentrail/web build
 

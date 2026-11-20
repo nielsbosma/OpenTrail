@@ -1,0 +1,28 @@
+{
+  "name": "@opentrail/browser",
+  "version": "0.1.0",
+  "description": "Records web sessions with rrweb and sends them to an OpenTrail server.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "vite build && node scripts/copy-to-web.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@rrweb/rrweb-plugin-console-record": "2.2.0",
+    "rrweb": "2.2.0",
+    "web-vitals": "6.2.3"
+  },
+  "devDependencies": {
+    "vite": "^8.3.6"
+  }
+}

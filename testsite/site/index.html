@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Test Shop</title>
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Test Shop</h1>
+      <p id="status">Waiting for a key: open with ?key=trk_pub_...&amp;host=http://localhost:3000&amp;scenario=all</p>
+      <nav><a href="/">Home</a> <a href="/app/orders" data-spa>Orders</a> <a href="/page2">Page Two</a></nav>
+    </header>
+
+    <main>
+      <section id="clicks" data-component="CheckoutForm">
+        <h2>Clicks</h2>
+        <button id="pay" aria-label="Pay Now" data-testid="pay-button"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="5" /></svg></button>
+        <button id="details" class="link">Show Details</button>
+        <div id="double" role="button" tabindex="0">Double Click Me</div>
+        <div id="menu" data-testid="context-area">Right Click Here</div>
+        <a id="danger" href="javascript:alert('x')" onclick="window.__clicked = true; return false;">Dangerous Link</a>
+      </section>
+
+      <section id="forms">
+        <h2>Forms</h2>
+        <label for="name">Full Name</label> <input id="name" name="fullName" autocomplete="off" />
+        <label for="pnr">Personal Number</label> <input id="pnr" name="pnr" autocomplete="off" />
+        <label for="card">Card Number</label> <input id="card" name="card" autocomplete="off" />
+        <label for="password">Password</label> <input id="password" type="password" autocomplete="off" />
+        <label for="unmasked">Search</label> <input id="unmasked" data-trail-unmask placeholder="Search" />
+        <label><input id="agree" type="checkbox" /> I Agree</label>
+        <select id="size" aria-label="Size"><option>Small</option><option>Large</option></select>
+      </section>
+
+      <section id="text">
+        <h2>Text</h2>
+        <p id="pnr-text">Customer pnr: 19811218-9876, card 4111 1111 1111 1111</p>
+        <p id="masked" data-trail-mask>Secret note for the clerk</p>
+        <div id="blocked" data-trail-block>Blocked content never leaves the browser</div>
+      </section>
+
+      <section id="dynamic">
+        <h2>Dynamic</h2>
+        <ul id="rows"></ul>
+        <iframe id="frame" src="/frame" title="Frame"></iframe>
+        <canvas id="canvas" width="120" height="60"></canvas>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

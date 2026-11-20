@@ -21,6 +21,10 @@ const SECTIONS: { title: string; items: { path: string; label: string; permissio
     ],
   },
   {
+    title: msg('Recording'),
+    items: [{ path: '/settings/projects', label: msg('Projects'), permission: 'projects.manage' }],
+  },
+  {
     title: msg('Integrations'),
     items: [
       { path: '/settings/admin/email', label: msg('Email'), permission: 'settings.manage' },

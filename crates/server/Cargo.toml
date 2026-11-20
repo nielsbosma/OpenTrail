@@ -40,3 +40,4 @@ opentrail-core = { workspace = true, features = ["testing"] }
 http-body-util = "0.1"
 sha2 = { workspace = true }
 url = "2"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod error;
+pub mod ingest;
 pub mod mcp;
 pub mod openapi;
 pub mod rest;
@@ -13,7 +14,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -21,6 +22,7 @@ use opentrail_core::context::App;
 use opentrail_core::service::DynService;
 use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::error::json_error;
 
@@ -32,6 +34,7 @@ pub struct AppState {
     pub proxies: Arc<security::ProxyPolicy>,
     pub in_flight: Arc<tokio::sync::Semaphore>,
     pub https: bool,
+    pub player_origins: Arc<security::PlayerOrigins>,
 }
 
 impl AppState {
@@ -45,6 +48,7 @@ impl AppState {
             proxies: Arc::default(),
             in_flight: Arc::new(tokio::sync::Semaphore::new(security::MAX_IN_FLIGHT)),
             https,
+            player_origins: Arc::default(),
         }
     }
 }
@@ -120,8 +124,19 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), security::same_origin))
         .layer(middleware::from_fn_with_state(state.clone(), security::general_limit));
 
-    let mut app = Router::new().nest("/api", api).merge(mcp::router());
+    let ingest = Router::new().route("/i/v1/batch", post(ingest::batch).options(ingest::preflight));
+    let mut app = Router::new().nest("/api", api).merge(ingest).merge(mcp::router());
     if let Some(dist) = web_dist() {
+        // The SDK is loaded by other sites, so it may be embedded anywhere.
+        let sdk = tower::ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                HeaderName::from_static("cross-origin-resource-policy"),
+                HeaderValue::from_static("cross-origin"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*")))
+            .layer(SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=300")))
+            .service(ServeFile::new(dist.join("sdk.js")));
+        app = app.route_service("/sdk.js", sdk);
         let spa = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
         app = app.fallback_service(spa).layer(middleware::from_fn(no_cache_html));
     }

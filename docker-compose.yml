@@ -3,6 +3,8 @@
 #   pnpm infra:up      Postgres and Mailpit for `pnpm dev`
 #   pnpm stack:up      also builds and runs the production image at http://localhost:8091
 #   pnpm stack:fresh   the same from empty, deleting the local data
+#   pnpm test:e2e      a fresh OpenTrail, the test site at http://localhost:8092, and Playwright
+#                      driving every scenario through it
 #
 # Mailpit's inbox: http://localhost:8036 (dev email goes there instead of Resend).
 
@@ -56,6 +58,55 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # The end-to-end run: its own database, emptied first, so every run starts from setup.
+  e2e-db:
+    profiles: [e2e]
+    image: postgres:18-alpine
+    environment:
+      PGPASSWORD: opentrail
+    command: ["sh", "-c", "psql -h postgres -U opentrail -d opentrail -c 'drop database if exists opentrail_e2e with (force)' -c 'create database opentrail_e2e'"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  e2e-app:
+    profiles: [e2e]
+    build: .
+    image: ${OPENTRAIL_IMAGE:-opentrail:local}
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      DATABASE_URL: postgres://opentrail:opentrail@postgres:5432/opentrail_e2e
+      APP_SECRET: local-e2e-profile-secret-change-me-0123456789
+      APP_URL: ${E2E_APP_URL:-http://e2e-app:3000}
+      # Production refuses plain http and example secrets; this only changes email and the issuer rule.
+      APP_ENV: development
+      SETUP_CODE: local-e2e-setup-code-0123456789
+    ports:
+      - "127.0.0.1:8093:3000"
+    depends_on:
+      e2e-db:
+        condition: service_completed_successfully
+
+  testsite:
+    profiles: [e2e]
+    build: testsite
+    ports:
+      - "127.0.0.1:8092:8092"
+
+  e2e:
+    profiles: [e2e]
+    build: testsite/e2e
+    environment:
+      OPENTRAIL_URL: http://e2e-app:3000
+      SITE_URL: http://testsite:8092
+      SETUP_CODE: local-e2e-setup-code-0123456789
+    depends_on:
+      e2e-app:
+        condition: service_healthy
+      testsite:
+        condition: service_started
 
 volumes:
   postgres:

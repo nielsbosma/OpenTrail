@@ -37,7 +37,22 @@ async fn sweep(ctx: &Ctx, conn: &mut sqlx::PgConnection) -> Result<()> {
     .bind(ctx.now)
     .execute(&mut *conn)
     .await?;
+    expire_sessions(ctx, conn).await?;
     Ok(())
+}
+
+/// Sessions past their project's retention, a bounded number per sweep so one sweep stays short.
+pub async fn expire_sessions(ctx: &Ctx, conn: &mut sqlx::PgConnection) -> Result<u64> {
+    Ok(sqlx::query(
+        "delete from recorded_sessions where id in (
+           select s.id from recorded_sessions s join projects p on p.id = s.project_id
+            where s.started_at < $1 - make_interval(days => p.retention_days)
+            limit 5000)",
+    )
+    .bind(ctx.now)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected())
 }
 
 pub async fn schedule_sweep(conn: &mut sqlx::PgConnection, at: Option<chrono::DateTime<chrono::Utc>>) -> Result<()> {

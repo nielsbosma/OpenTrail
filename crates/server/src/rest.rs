@@ -52,6 +52,19 @@ pub const ROUTES: &[Route] = &[
     route(Method::GET, "/users", "users.list"),
     route(Method::GET, "/audit", "audit.list"),
     route(Method::GET, "/audit/verify", "audit.verify"),
+    route(Method::GET, "/projects", "projects.list"),
+    route(Method::POST, "/projects", "projects.create"),
+    route(Method::GET, "/projects/{id}", "projects.get"),
+    route(Method::PATCH, "/projects/{id}", "projects.update"),
+    route(Method::POST, "/projects/{projectId}/keys", "projects.create_key"),
+    route(Method::DELETE, "/keys/{id}", "projects.revoke_key"),
+    route(Method::GET, "/sessions", "sessions.list"),
+    route(Method::GET, "/sessions/{id}", "sessions.get"),
+    route(Method::GET, "/sessions/{id}/timeline", "sessions.timeline"),
+    route(Method::DELETE, "/sessions/{id}", "sessions.delete"),
+    route(Method::GET, "/requests/{id}/body", "sessions.request_body"),
+    route(Method::GET, "/events", "events.search"),
+    route(Method::GET, "/events/groups", "events.group"),
 ];
 
 fn filter(method: &Method) -> MethodFilter {
