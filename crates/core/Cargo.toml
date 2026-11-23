@@ -38,7 +38,7 @@ x509-cert = { version = "0.3", features = ["pem"] }
 uuid = { workspace = true }
 ciborium = "0.2.2"
 ed25519-dalek = "3"
-p256 = { version = "0.13", features = ["ecdsa"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [features]
